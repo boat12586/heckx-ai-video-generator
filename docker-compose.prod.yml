@@ -1,0 +1,277 @@
+# Production Docker Compose for Heckx AI Video Generator
+# Optimized for cloud deployment (Railway/Render)
+version: '3.8'
+
+services:
+  # Main application
+  heckx-video-generator:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: heckx-video-generator-prod
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5001}:5001"  # API port (Railway/Render compatible)
+      - "5002:5002"  # Web interface port
+    environment:
+      # Application Configuration
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - PORT=${PORT:-5001}
+      - HOST=0.0.0.0
+      
+      # API Keys and External Services
+      - PIXABAY_API_KEY=${PIXABAY_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # Supabase Configuration
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      
+      # Database Configuration
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      
+      # Security Configuration
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - API_KEY=${API_KEY}
+      
+      # Performance Configuration
+      - MAX_CONCURRENT_JOBS=3
+      - MAX_UPLOAD_SIZE=200MB
+      - REQUEST_TIMEOUT=600
+      - WORKER_PROCESSES=2
+      
+      # Monitoring and Logging
+      - LOG_LEVEL=INFO
+      - SENTRY_DSN=${SENTRY_DSN}
+      - PROMETHEUS_ENABLED=true
+      
+      # Storage Configuration
+      - STORAGE_BACKEND=supabase
+      - TEMP_DIR=/app/temp
+      - UPLOAD_DIR=/app/uploads
+      - DOWNLOAD_DIR=/app/downloads
+      
+      # Feature Flags
+      - ENABLE_API_AUTH=true
+      - ENABLE_RATE_LIMITING=true
+      - ENABLE_CORS=true
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      
+    volumes:
+      - app_data:/app/data
+      - app_logs:/app/logs
+      - app_temp:/app/temp
+      - app_uploads:/app/uploads
+      - app_downloads:/app/downloads
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - heckx-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+
+  # Redis for caching and job queue
+  redis:
+    image: redis:7-alpine
+    container_name: heckx-redis-prod
+    restart: unless-stopped
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - heckx-network
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD:-defaultpassword}
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  # PostgreSQL for analytics and metadata
+  postgres:
+    image: postgres:15-alpine
+    container_name: heckx-postgres-prod
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-heckx_video}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_INITDB_ARGS="--encoding=UTF-8 --locale=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - heckx-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-heckx_video}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
+
+  # Nginx reverse proxy and load balancer
+  nginx:
+    image: nginx:alpine
+    container_name: heckx-nginx-prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - app_downloads:/usr/share/nginx/html/downloads:ro
+    depends_on:
+      - heckx-video-generator
+    networks:
+      - heckx-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: heckx-prometheus-prod
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - heckx-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 512M
+
+  # Grafana for monitoring dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: heckx-grafana-prod
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - heckx-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 512M
+
+  # Health check service
+  healthcheck:
+    build: 
+      context: ./scripts
+      dockerfile: Dockerfile.healthcheck
+    container_name: heckx-healthcheck-prod
+    restart: unless-stopped
+    environment:
+      - CHECK_INTERVAL=60
+      - HEALTH_ENDPOINTS=http://heckx-video-generator:5001/api/health,http://nginx/health
+      - SLACK_WEBHOOK=${SLACK_WEBHOOK}
+      - EMAIL_ALERTS=${EMAIL_ALERTS}
+    depends_on:
+      - heckx-video-generator
+      - nginx
+    networks:
+      - heckx-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+
+volumes:
+  app_data:
+    driver: local
+  app_logs:
+    driver: local
+  app_temp:
+    driver: local
+  app_uploads:
+    driver: local
+  app_downloads:
+    driver: local
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  heckx-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

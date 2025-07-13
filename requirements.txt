@@ -1,0 +1,55 @@
+# Core Dependencies
+flask==2.3.3
+flask-cors==4.0.0
+flask-socketio==5.3.6
+eventlet==0.33.3
+requests==2.31.0
+python-dotenv==1.0.0
+
+# AI and Language Processing
+openai-whisper==20230918
+langchain==0.0.350
+langchain-community==0.0.5
+
+# Audio Processing
+pyttsx3==2.90
+sounddevice==0.4.6
+scipy==1.11.3
+numpy==1.24.3
+
+# Data Processing
+pandas==2.1.1
+beautifulsoup4==4.12.2
+rich==13.6.0
+
+# Database
+supabase==1.2.0
+
+# Video Processing (FFmpeg wrapper)
+imageio==2.31.3
+imageio-ffmpeg==0.4.9
+ffmpeg-python==0.2.0
+
+# Testing
+pytest==7.4.2
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+pytest-mock==3.11.1
+
+# Code Quality
+black==23.7.0
+flake8==6.0.0
+isort==5.12.0
+
+# Production
+gunicorn==21.2.0
+supervisor==4.2.5
+
+# Monitoring
+prometheus-client==0.17.1
+psutil==5.9.5
+
+# Additional
+json5==0.9.14
+pillow==10.0.1
+aiofiles==23.2.1

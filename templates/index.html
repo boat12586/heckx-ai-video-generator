@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Heckx AI Assistant - Desktop{% endblock %}
+
+{% block content %}
+<div class="chat-container">
+    <div class="chat-messages" id="chatMessages">
+        <div class="message system">
+            <div class="message-header">🤖 ระบบ</div>
+            <div class="message-content">สวัสดีครับ! ผมคือ Heckx ผู้ช่วย AI ระดับโปรฟีเชื่อนัล 
+พร้อมให้บริการด้วยข้อมูลล่าสุดจาก Wikipedia และแหล่งข่าวไทยที่เชื่อถือได้
+มีอะไรให้ช่วยเหลือไหมครับ?</div>
+        </div>
+    </div>
+    
+    <div class="status-indicator" id="statusIndicator">🟢 พร้อมใช้งาน</div>
+    
+    <div class="input-area">
+        <div class="input-group">
+            <input type="text" class="input-field" id="messageInput" 
+                   placeholder="💬 พิมพ์คำถามของคุณที่นี่..." 
+                   autocomplete="off">
+            <button class="send-button" id="sendButton">📤 ส่ง</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+const socket = io();
+const chatMessages = document.getElementById('chatMessages');
+const messageInput = document.getElementById('messageInput');
+const sendButton = document.getElementById('sendButton');
+const statusIndicator = document.getElementById('statusIndicator');
+
+let isThinking = false;
+
+// เชื่อมต่อ WebSocket
+socket.on('connect', function() {
+    console.log('Connected to server');
+    statusIndicator.textContent = '🟢 เชื่อมต่อแล้ว';
+});
+
+socket.on('disconnect', function() {
+    statusIndicator.textContent = '🔴 ขาดการเชื่อมต่อ';
+});
+
+// รับสถานะ
+socket.on('thinking', function(data) {
+    isThinking = data.status;
+    if (isThinking) {
+        statusIndicator.innerHTML = '🧠 <span class="thinking">กำลังคิด</span>';
+        sendButton.disabled = true;
+    } else {
+        statusIndicator.textContent = '🟢 พร้อมใช้งาน';
+        sendButton.disabled = false;
+    }
+});
+
+socket.on('searching', function(data) {
+    if (data.status) {
+        statusIndicator.textContent = '🔍 กำลังค้นหาข้อมูลล่าสุด...';
+    }
+});
+
+// รับคำตอบ
+socket.on('response', function(data) {
+    addMessage('heckx', data.response, data.timestamp);
+    messageInput.focus();
+});
+
+// รับข้อผิดพลาด
+socket.on('error', function(data) {
+    addMessage('system', '❌ ' + data.message);
+});
+
+// ฟังก์ชันเพิ่มข้อความ
+function addMessage(sender, content, timestamp = null) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${sender}`;
+    
+    const time = timestamp ? 
+        new Date(timestamp).toLocaleTimeString('th-TH') : 
+        new Date().toLocaleTimeString('th-TH');
+    
+    let icon, senderName;
+    switch(sender) {
+        case 'user':
+            icon = '👤';
+            senderName = 'คุณ';
+            break;
+        case 'heckx':
+            icon = '🤖';
+            senderName = 'Heckx';
+            break;
+        default:
+            icon = '⚠️';
+            senderName = 'ระบบ';
+    }
+    
+    messageDiv.innerHTML = `
+        <div class="message-header">${icon} ${senderName} <span style="color: #888; font-size: 0.8em;">[${time}]</span></div>
+        <div class="message-content">${content}</div>
+    `;
+    
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// ส่งข้อความ
+function sendMessage() {
+    const message = messageInput.value.trim();
+    if (!message || isThinking) return;
+    
+    addMessage('user', message);
+    socket.emit('send_message', {message: message});
+    messageInput.value = '';
+}
+
+// Event listeners
+sendButton.addEventListener('click', sendMessage);
+
+messageInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+});
+
+// Auto-focus
+messageInput.focus();
+{% endblock %}
